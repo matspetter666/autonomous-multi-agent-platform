@@ -1,0 +1,126 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: amp_postgres
+    environment:
+      POSTGRES_DB: autonomous_agent_platform
+      POSTGRES_USER: amp_user
+      POSTGRES_PASSWORD: changeme_secure_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U amp_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache & Message Broker
+  redis:
+    image: redis:7-alpine
+    container_name: amp_redis
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Milvus Vector Database (for semantic search)
+  milvus:
+    image: milvusdb/milvus:latest
+    container_name: amp_milvus
+    environment:
+      COMMON_STORAGETYPE: local
+    volumes:
+      - milvus_data:/var/lib/milvus
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Main API Server
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: amp_api
+    environment:
+      DATABASE_URL: postgresql://amp_user:changeme_secure_password@postgres:5432/autonomous_agent_platform
+      REDIS_URL: redis://redis:6379/0
+      MILVUS_HOST: milvus
+      MILVUS_PORT: 19530
+      ENVIRONMENT: development
+      DEBUG: "true"
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      milvus:
+        condition: service_healthy
+    volumes:
+      - ./src:/app/src
+      - ./config:/app/config
+    command: python -m uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Celery Worker
+  celery_worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: amp_celery_worker
+    environment:
+      DATABASE_URL: postgresql://amp_user:changeme_secure_password@postgres:5432/autonomous_agent_platform
+      REDIS_URL: redis://redis:6379/0
+      MILVUS_HOST: milvus
+      MILVUS_PORT: 19530
+      ENVIRONMENT: development
+    depends_on:
+      - postgres
+      - redis
+      - milvus
+    volumes:
+      - ./src:/app/src
+      - ./config:/app/config
+    command: celery -A src.workers.tasks worker --loglevel=info
+
+  # Celery Beat (Scheduler)
+  celery_beat:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: amp_celery_beat
+    environment:
+      DATABASE_URL: postgresql://amp_user:changeme_secure_password@postgres:5432/autonomous_agent_platform
+      REDIS_URL: redis://redis:6379/0
+      ENVIRONMENT: development
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - ./src:/app/src
+      - ./config:/app/config
+    command: celery -A src.workers.tasks beat --loglevel=info
+
+volumes:
+  postgres_data:
+  redis_data:
+  milvus_data:
+
+networks:
+  default:
+    name: amp_network
