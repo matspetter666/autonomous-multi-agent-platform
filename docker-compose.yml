@@ -5,50 +5,60 @@ services:
   postgres:
     image: postgres:15-alpine
     container_name: amp_postgres
+    restart: unless-stopped
     environment:
-      POSTGRES_DB: autonomous_agent_platform
-      POSTGRES_USER: amp_user
-      POSTGRES_PASSWORD: changeme_secure_password
+      POSTGRES_DB: ${POSTGRES_DB:-autonomous_agent_platform}
+      POSTGRES_USER: ${POSTGRES_USER:-amp_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_this_secure_password}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U amp_user"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-amp_user} -d ${POSTGRES_DB:-autonomous_agent_platform}"]
       interval: 10s
       timeout: 5s
       retries: 5
+    security_opt:
+      - no-new-privileges:true
 
   # Redis Cache & Message Broker
   redis:
     image: redis:7-alpine
     container_name: amp_redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-change_this_redis_password}"]
     volumes:
       - redis_data:/data
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-change_this_redis_password}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
+    security_opt:
+      - no-new-privileges:true
 
   # Milvus Vector Database (for semantic search)
   milvus:
     image: milvusdb/milvus:latest
     container_name: amp_milvus
+    restart: unless-stopped
     environment:
       COMMON_STORAGETYPE: local
     volumes:
       - milvus_data:/var/lib/milvus
     ports:
-      - "19530:19530"
-      - "9091:9091"
+      - "${MILVUS_PORT:-19530}:19530"
+      - "${MILVUS_WEB_PORT:-9091}:9091"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
       interval: 10s
       timeout: 5s
       retries: 5
+    security_opt:
+      - no-new-privileges:true
 
   # Main API Server
   api:
@@ -56,15 +66,21 @@ services:
       context: .
       dockerfile: docker/Dockerfile
     container_name: amp_api
+    restart: unless-stopped
+    env_file:
+      - .env
     environment:
-      DATABASE_URL: postgresql://amp_user:changeme_secure_password@postgres:5432/autonomous_agent_platform
-      REDIS_URL: redis://redis:6379/0
-      MILVUS_HOST: milvus
-      MILVUS_PORT: 19530
-      ENVIRONMENT: development
-      DEBUG: "true"
+      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-amp_user}:${POSTGRES_PASSWORD:-change_this_secure_password}@postgres:5432/${POSTGRES_DB:-autonomous_agent_platform}}
+      REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD:-change_this_redis_password}@redis:6379/0}
+      MILVUS_HOST: ${MILVUS_HOST:-milvus}
+      MILVUS_PORT: ${MILVUS_PORT:-19530}
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      DEBUG: ${DEBUG:-false}
+      SECRET_KEY: ${SECRET_KEY:-change_this_secret_key}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-replace_with_openai_api_key}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-replace_with_github_token}
     ports:
-      - "8000:8000"
+      - "${API_PORT:-8000}:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -76,6 +92,8 @@ services:
       - ./src:/app/src
       - ./config:/app/config
     command: python -m uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+    security_opt:
+      - no-new-privileges:true
 
   # Celery Worker
   celery_worker:
@@ -83,12 +101,18 @@ services:
       context: .
       dockerfile: docker/Dockerfile
     container_name: amp_celery_worker
+    restart: unless-stopped
+    env_file:
+      - .env
     environment:
-      DATABASE_URL: postgresql://amp_user:changeme_secure_password@postgres:5432/autonomous_agent_platform
-      REDIS_URL: redis://redis:6379/0
-      MILVUS_HOST: milvus
-      MILVUS_PORT: 19530
-      ENVIRONMENT: development
+      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-amp_user}:${POSTGRES_PASSWORD:-change_this_secure_password}@postgres:5432/${POSTGRES_DB:-autonomous_agent_platform}}
+      REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD:-change_this_redis_password}@redis:6379/0}
+      MILVUS_HOST: ${MILVUS_HOST:-milvus}
+      MILVUS_PORT: ${MILVUS_PORT:-19530}
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      SECRET_KEY: ${SECRET_KEY:-change_this_secret_key}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-replace_with_openai_api_key}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-replace_with_github_token}
     depends_on:
       - postgres
       - redis
@@ -97,6 +121,8 @@ services:
       - ./src:/app/src
       - ./config:/app/config
     command: celery -A src.workers.tasks worker --loglevel=info
+    security_opt:
+      - no-new-privileges:true
 
   # Celery Beat (Scheduler)
   celery_beat:
@@ -104,10 +130,14 @@ services:
       context: .
       dockerfile: docker/Dockerfile
     container_name: amp_celery_beat
+    restart: unless-stopped
+    env_file:
+      - .env
     environment:
-      DATABASE_URL: postgresql://amp_user:changeme_secure_password@postgres:5432/autonomous_agent_platform
-      REDIS_URL: redis://redis:6379/0
-      ENVIRONMENT: development
+      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-amp_user}:${POSTGRES_PASSWORD:-change_this_secure_password}@postgres:5432/${POSTGRES_DB:-autonomous_agent_platform}}
+      REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD:-change_this_redis_password}@redis:6379/0}
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      SECRET_KEY: ${SECRET_KEY:-change_this_secret_key}
     depends_on:
       - postgres
       - redis
@@ -115,6 +145,8 @@ services:
       - ./src:/app/src
       - ./config:/app/config
     command: celery -A src.workers.tasks beat --loglevel=info
+    security_opt:
+      - no-new-privileges:true
 
 volumes:
   postgres_data:
